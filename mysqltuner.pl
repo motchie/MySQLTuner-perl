@@ -2,6 +2,7 @@
 # mysqltuner.pl - Version 1.2.0
 # High Performance MySQL Tuning Script
 # Copyright (C) 2006-2011 Major Hayden - major@mhtx.net
+# Modified for Windows Copyright (C) 2012 Toru Motchie MOCHIDA - mysqltuner-windows@outlook.com
 #
 # For the latest updates, please visit http://mysqltuner.com/
 # Git repository available at http://github.com/rackerhacker/MySQLTuner-perl
@@ -43,6 +44,8 @@ use Getopt::Long;
 # Set up a few variables for use in the script
 my $tunerversion = "1.2.0";
 my (@adjvars, @generalrec);
+
+my $isWin32 = ( $^O =~ /MSWin32/ ) ? 1 : 0;
 
 # Set defaults
 my %opt = (
@@ -87,6 +90,7 @@ sub usage {
 		"   MySQLTuner $tunerversion - MySQL High Performance Tuning Script\n".
 		"   Bug reports, feature requests, and downloads at http://mysqltuner.com/\n".
 		"   Maintained by Major Hayden (major\@mhtx.net) - Licensed under GPL\n".
+		"   Modified for Windows by Toru Motchie MOCHIDA (mysqltuner-windows\@outlook.com) \n".
 		"\n".
 		"   Important Usage Guidelines:\n".
 		"      To run the script with the default options, run the script without arguments\n".
@@ -118,6 +122,10 @@ sub usage {
 }
 
 my $devnull = File::Spec->devnull();
+
+if( $isWin32 ) {
+	$opt{nocolor} = 1;
+}
 
 # Setting up the colors for the print styles
 my $good = ($opt{nocolor} == 0)? "[\e[0;32mOK\e[0m]" : "[OK]" ;
@@ -194,13 +202,13 @@ sub pretty_uptime {
 }
 
 # Retrieves the memory installed on this machine
-my ($physical_memory,$swap_memory,$duflags);
+my ($physical_memory,$swap_memory,$duflags,$system_type);
 sub os_setup {
 	sub memerror {
 		badprint "Unable to determine total memory/swap; use '--forcemem' and '--forceswap'\n";
 		exit;
 	}
-	my $os = `uname`;
+	my $os = $isWin32 ? $^O : `uname`;
 	$duflags = ($os =~ /Linux/) ? '-b' : '';
 	if ($opt{'forcemem'} > 0) {
 		$physical_memory = $opt{'forcemem'} * 1048576;
@@ -239,6 +247,15 @@ sub os_setup {
 			$swap_memory = `lsps -as | awk -F"(MB| +)" '/MB /{print \$2}'` or memerror;
 			chomp($swap_memory);
 			$swap_memory = $swap_memory*1024*1024;
+		} elsif ($os =~ /MSWin32/ ) {
+			my $systeminfo = `systeminfo /nh /fo csv` or memerror;
+			my @systeminfo = split( /\"/, $systeminfo );
+			$physical_memory = $systeminfo[45];
+			$physical_memory =~ s/,//;
+			$physical_memory =~ s/ MB//;
+			$physical_memory = $physical_memory*1024*1024;
+
+			$system_type = $systeminfo[27];
 		}
 	}
 	chomp($physical_memory);
@@ -249,7 +266,7 @@ my ($mysqllogin,$doremote,$remotestring);
 sub mysql_setup {
 	$doremote = 0;
 	$remotestring = '';
-	my $command = `which mysqladmin`;
+	my $command = $isWin32 ? locate_mysqladmin() : `which mysqladmin`;
 	chomp($command);
 	if (! -e $command) {
 		badprint "Unable to find mysqladmin in your \$PATH.  Is MySQL installed?\n";
@@ -274,7 +291,11 @@ sub mysql_setup {
 	}
 	# Did we already get a username and password passed on the command line?
 	if ($opt{user} ne 0 and $opt{pass} ne 0) {
-		$mysqllogin = "-u $opt{user} -p'$opt{pass}'".$remotestring;
+		if( $isWin32 ) {
+			$mysqllogin = "-u$opt{user} -p$opt{pass}".$remotestring;
+		} else {
+			$mysqllogin = "-u $opt{user} -p'$opt{pass}'".$remotestring;
+		}
 		my $loginstatus = `mysqladmin ping $mysqllogin 2>&1`;
 		if ($loginstatus =~ /mysqld is alive/) {
 			goodprint "Logged in using credentials passed on the command line\n";
@@ -464,15 +485,17 @@ sub mysql_version_ge {
 my ($arch);
 sub check_architecture {
 	if ($doremote eq 1) { return; }
-	if (`uname` =~ /SunOS/ && `isainfo -b` =~ /64/) {
+	if ( $isWin32 && $system_type eq "x64-based PC" ) {
 		$arch = 64;
 		goodprint "Operating on 64-bit architecture\n";
-	} elsif (`uname` !~ /SunOS/ && `uname -m` =~ /64/) {
+	} elsif ( !$isWin32 && `uname` =~ /SunOS/ && `isainfo -b` =~ /64/) {
 		$arch = 64;
 		goodprint "Operating on 64-bit architecture\n";
-	} elsif (`uname` =~ /AIX/ && `bootinfo -K` =~ /64/) {
+	} elsif ( !$isWin32 && `uname` !~ /SunOS/ && `uname -m` =~ /64/) {
 		$arch = 64;
 		goodprint "Operating on 64-bit architecture\n";
+	} elsif ( !$isWin32 && `uname` =~ /AIX/ && `bootinfo -K` =~ /64/) {
+		$arch = 64;
 	} else {
 		$arch = 32;
 		if ($physical_memory > 2147483648) {
@@ -938,10 +961,25 @@ sub make_recommendations {
 	print "\n";
 }
 
+# find mysqladmin
+
+sub locate_mysqladmin {
+	my $location = '';
+	my @PATH = split( /;/, $ENV{PATH} );
+
+	foreach my $dir (@PATH) {
+		next if( ! -e $dir.'\mysqladmin.exe' );
+		$location = $dir.'\mysqladmin.exe';
+	}
+
+	return $location;
+}
+
 # ---------------------------------------------------------------------------
 # BEGIN 'MAIN'
 # ---------------------------------------------------------------------------
 print	"\n >>  MySQLTuner $tunerversion - Major Hayden <major\@mhtx.net>\n".
+		" >>  Modified for Windows by Toru Motchie MOCHIDA <mysqltuner-windows\@outlook.com>\n".
 		" >>  Bug reports, feature requests, and downloads at http://mysqltuner.com/\n".
 		" >>  Run with '--help' for additional options and output filtering\n";
 mysql_setup;					# Gotta login first
