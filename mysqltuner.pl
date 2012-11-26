@@ -45,7 +45,7 @@ use Getopt::Long;
 my $tunerversion = "1.2.0";
 my (@adjvars, @generalrec);
 
-my $isWin32 = ( $^O =~ /MSWin32/ ) ? 1 : 0;
+my $isWin32 = ( $^O eq 'MSWin32' ) ? 1 : 0;
 
 # Set defaults
 my %opt = (
@@ -291,10 +291,15 @@ sub mysql_setup {
 	}
 	# Did we already get a username and password passed on the command line?
 	if ($opt{user} ne 0 and $opt{pass} ne 0) {
-		if( $isWin32 ) {
-			$mysqllogin = "-u$opt{user} -p$opt{pass}".$remotestring;
+		my($user, $pass) = ($opt{user}, $opt{pass});
+		if ($isWin32) {
+			$user =~ s/"/\\"/g;
+			$pass =~ s/"/\\"/g;
+			$mysqllogin = qq{--user="$user" --password="$pass"$remotestring};
 		} else {
-			$mysqllogin = "-u $opt{user} -p'$opt{pass}'".$remotestring;
+			$user =~ s/'/'\\''/g;
+			$pass =~ s/'/'\\''/g;
+			$mysqllogin = "--user='$opt{user}' --password='$opt{pass}'$remotestring";
 		}
 		my $loginstatus = `mysqladmin ping $mysqllogin 2>&1`;
 		if ($loginstatus =~ /mysqld is alive/) {
@@ -348,9 +353,22 @@ sub mysql_setup {
 			system("stty echo >$devnull 2>&1");
 			chomp($password);
 			chomp($name);
-			$mysqllogin = "-u $name";
+			$mysqllogin = '--user=';
+			if ($isWin32) {
+				$name =~ s/"/\\"/g;
+				$mysqllogin .= qq{"$name"};
+			} else {
+				$name =~ s/'/'\\''/g;
+				$mysqllogin .= "'$name'";
+			}
 			if (length($password) > 0) {
-				$mysqllogin .= " -p'$password'";
+				if ($isWin32) {
+					$password =~ s/"/\\"/g;
+					$mysqllogin .= qq{ --password="$password"};
+				} else {
+					$password =~ s/'/'\\''/g;
+					$mysqllogin .= " --password='$password'";
+				}
 			}
 			$mysqllogin .= $remotestring;
 			my $loginstatus = `mysqladmin ping $mysqllogin 2>&1`;
@@ -634,7 +652,7 @@ sub calculations {
 	if ($mystat{'Key_read_requests'} > 0) {
 		$mycalc{'pct_keys_from_mem'} = sprintf("%.1f",(100 - (($mystat{'Key_reads'} / $mystat{'Key_read_requests'}) * 100)));
 	} else {
-	    $mycalc{'pct_keys_from_mem'} = 0;
+		$mycalc{'pct_keys_from_mem'} = 0;
 	}
 	if ($doremote eq 0 and !mysql_version_ge(5)) {
 		my $size = 0;
@@ -815,10 +833,10 @@ sub mysql_stats {
 		if ($mycalc{'query_cache_prunes_per_day'} > 98) {
 			badprint "Query cache prunes per day: $mycalc{'query_cache_prunes_per_day'}\n";
 			if ($myvar{'query_cache_size'} > 128*1024*1024) {
-			    push(@generalrec,"Increasing the query_cache size over 128M may reduce performance");
-		        push(@adjvars,"query_cache_size (> ".hr_bytes_rnd($myvar{'query_cache_size'}).") [see warning above]");
+				push(@generalrec,"Increasing the query_cache size over 128M may reduce performance");
+				push(@adjvars,"query_cache_size (> ".hr_bytes_rnd($myvar{'query_cache_size'}).") [see warning above]");
 			} else {
-		        push(@adjvars,"query_cache_size (> ".hr_bytes_rnd($myvar{'query_cache_size'}).")");
+				push(@adjvars,"query_cache_size (> ".hr_bytes_rnd($myvar{'query_cache_size'}).")");
 			}
 		} else {
 			goodprint "Query cache prunes per day: $mycalc{'query_cache_prunes_per_day'}\n";
@@ -961,18 +979,18 @@ sub make_recommendations {
 	print "\n";
 }
 
-# find mysqladmin
+# Detect mysqladmin
 
 sub locate_mysqladmin {
-	my $location = '';
-	my @PATH = split( /;/, $ENV{PATH} );
-
-	foreach my $dir (@PATH) {
-		next if( ! -e $dir.'\mysqladmin.exe' );
-		$location = $dir.'\mysqladmin.exe';
+	foreach my $path (split( /;+/, $ENV{PATH} )) {
+		$path =~ s/\\+$//;
+		my $file = "$path\\mysqladmin.exe";
+		if (-e $file) {
+			return $file;
+		}
 	}
 
-	return $location;
+	return '';
 }
 
 # ---------------------------------------------------------------------------
